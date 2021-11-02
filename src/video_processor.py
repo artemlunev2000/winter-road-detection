@@ -1,8 +1,7 @@
 from cv2 import waitKey, destroyAllWindows, line, LINE_8, bitwise_and, cvtColor, COLOR_BGR2GRAY, \
-    threshold, THRESH_BINARY, dilate
+    threshold, THRESH_BINARY, dilate, imshow, VideoCapture
 
 import numpy as np
-import cv2 as cv
 
 from src.frame_processor import process_frame
 from src.frame_preprocessor import preprocess_frame
@@ -30,7 +29,7 @@ def detect_hood_ending(images):
 
 
 def process_video(path):
-    cap = cv.VideoCapture(path)
+    cap = VideoCapture(path)
     frame_counter = 0
     x1 = x2 = None
 
@@ -41,45 +40,53 @@ def process_video(path):
     while cap.isOpened():
         frame_counter += 1
         ret, frame = cap.read()
-        new_frame = frame[39:frame.shape[0], 0:frame.shape[1]]
+
+        # in case banner in frame
+        # frame = frame[39:frame.shape[0], 0:frame.shape[1]]
 
         if hood_ending is None:
             if len(possible_hood_area_images) < needed_hood_area_images:
                 possible_hood_area_images.append(
-                    cvtColor(frame[int(frame.shape[0]*2/3):frame.shape[0], 0:frame.shape[1]], COLOR_BGR2GRAY)
+                    cvtColor(
+                        frame[int(frame.shape[0]*2/3):frame.shape[0], 0:frame.shape[1]],
+                        COLOR_BGR2GRAY
+                    )
                 )
             else:
-                hood_ending = new_frame.shape[0] - detect_hood_ending(possible_hood_area_images) - 40
+                hood_ending = frame.shape[0] - detect_hood_ending(possible_hood_area_images) - 20
 
         if not ret:
             print("Can't receive frame. Exiting.")
             break
 
-        if frame_counter % 100 == 0:
-            markers_image, horizon = preprocess_frame(new_frame)
-            new_frame, x1, x2 = process_frame(new_frame, hood_ending, markers_image)
-            cv.imshow('frame', new_frame)
+        if frame_counter % 10 == 0:
+            markers_image, found_labels = preprocess_frame(frame)
+            frame, x1, x2 = process_frame(frame, hood_ending, markers_image, found_labels)
+            imshow('frame', frame)
             frame_counter = 0
         elif x1 is not None and x2 is not None:
-            new_frame = line(new_frame,
-                             (0, int(x1[0])),
-                             (400, int(x1[0] + x1[1] * 400)),
-                             (50, 50, 50),
-                             5,
-                             LINE_8)
-            new_frame = line(new_frame,
-                             (new_frame.shape[1], int(x2[0] + x2[1] * new_frame.shape[1])),
-                             (new_frame.shape[1] - 400, int(x2[0] + x2[1] * (new_frame.shape[1] - 400))),
-                             (50, 50, 50),
-                             5,
-                             LINE_8)
-            cv.imshow('frame', new_frame)
+            frame = line(
+                frame,
+                (0, int(x1[0])),
+                (400, int(x1[0] + x1[1] * 400)),
+                (100, 100, 200),
+                5,
+                LINE_8
+            )
+            frame = line(
+                frame,
+                (frame.shape[1], int(x2[0] + x2[1] * frame.shape[1])),
+                (frame.shape[1] - 400, int(x2[0] + x2[1] * (frame.shape[1] - 400))),
+                (100, 100, 200),
+                5,
+                LINE_8
+            )
+            imshow('frame', frame)
         else:
-            cv.imshow('frame', new_frame)
-        if cv.waitKey(1) == ord('q'):
+            imshow('frame', frame)
+        if waitKey(1) == ord('q'):
             break
 
     waitKey(0)
     destroyAllWindows()
     cap.release()
-    cv.destroyAllWindows()

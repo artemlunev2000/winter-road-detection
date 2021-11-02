@@ -1,5 +1,5 @@
 from cv2 import inRange, connectedComponentsWithStats, cvtColor, COLOR_BGR2GRAY, threshold, THRESH_BINARY, \
-    erode, dilate, bitwise_and
+    erode, dilate, bitwise_and, findContours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, vconcat
 from time import time
 
 import numpy as np
@@ -20,44 +20,54 @@ def analyse_components(components, frame):
     return [sky, road, left, right]
 
 
-def find_horizon(road_component, frame):
-    number_of_pixels_in_slice = 6
-    min_pixels_sum = None
-    horizon = None
+def find_horizon(road_frame):
+    contours, img = findContours(road_frame, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE)
+    contours = [point[0] for point in contours[0]]
+    contours = sorted(contours, key=lambda x: x[1])
 
-    for y_coord in range(int(frame.shape[0] / 3), int(frame.shape[0] * 2 / 3), number_of_pixels_in_slice):
-        pixels_sum = 0
-        for x_coord in range(frame.shape[1]):
-            for i in range(number_of_pixels_in_slice):
-                if frame[y_coord+i][x_coord] == road_component['label']:
-                    pixels_sum += 1
-        if (min_pixels_sum is None or pixels_sum < min_pixels_sum) and pixels_sum != 0:
-            min_pixels_sum = pixels_sum
-            horizon = y_coord + number_of_pixels_in_slice / 2
+    number_of_pixels_in_slice = 5
+    min_thickness = road_frame.shape[1]
+    min_thickness_coordinate = None
 
-    return int(horizon + 50)
+    current_left_pixel = road_frame.shape[1]
+    current_right_pixel = 0
+    current_slice_start = contours[0][1]
+    for point in contours:
+        if point[1] - current_slice_start >= number_of_pixels_in_slice:
+            current_thickness = current_right_pixel - current_left_pixel
+            middle = (current_left_pixel + current_right_pixel) / 2
+            if road_frame.shape[1] / 20 < current_thickness < min_thickness and \
+                    road_frame.shape[1] / 3 < middle < road_frame.shape[1] * 2 / 3:
+                min_thickness = current_thickness
+                min_thickness_coordinate = current_slice_start + int(number_of_pixels_in_slice / 2)
+            current_slice_start = point[1]
+            current_left_pixel = road_frame.shape[1]
+            current_right_pixel = 0
+
+        if point[0] < current_left_pixel:
+            current_left_pixel = point[0]
+        if point[0] > current_right_pixel:
+            current_right_pixel = point[0]
+
+    lower_part = road_frame[min_thickness_coordinate:road_frame.shape[0]]
+    upper_part = np.zeros((road_frame.shape[0] - lower_part.shape[0], road_frame.shape[1], 1), road_frame.dtype)
+    road_frame = vconcat([upper_part, lower_part])
+
+    return road_frame
 
 
 def preprocess_frame(frame):
-    s = time()
     frame = cvtColor(frame, COLOR_BGR2GRAY)
     threshold(frame, 70, 255, THRESH_BINARY, frame)
-    e = time()
-    print(f'6 - {e - s}')
+
     # get rid of noise
-    s = time()
     kernel = np.ones((7, 7), np.uint8)
     frame = erode(frame, kernel)
     frame = dilate(frame, kernel)
-    e = time()
-    print(f'7 - {e - s}')
-    s = time()
-    retval, labels, stats, centroids = connectedComponentsWithStats(frame, connectivity=8)
-    e = time()
-    print(f'8 - {e - s}')
+
+    retval, labels, stats, centroids = connectedComponentsWithStats(frame, connectivity=4)
     labels = np.uint8(labels)
 
-    s = time()
     components_sizes = stats[0:, -1]
     components = [
         {
@@ -68,26 +78,21 @@ def preprocess_frame(frame):
         for i in range(retval)
     ]
     components = sorted(components, key=lambda x: x['size'], reverse=True)[:4]
-    e = time()
-    print(f'9 - {e - s}')
-
-    s = time()
     components = analyse_components(components, frame)
-    e = time()
-    print(f'10 - {e - s}')
-    s = time()
-    horizon = find_horizon(components[1], labels)
-    e = time()
-    print(f'11 - {e - s}')
-    found_labels = [comp['label'] for comp in components if comp is not None]
 
-    erode_final_kernel = np.ones((15, 15), np.uint8)
-    s = time()
-    markers_images = [bitwise_and(labels + 1, inRange(labels+1, lbl+1, lbl+1)) for lbl in found_labels]
-    e = time()
-    print(f'12 - {e - s}')
-    s = time()
-    final_marker_image = sum(markers_images)
-    e = time()
-    print(f'13 - {e - s}')
-    return final_marker_image, horizon
+    found_labels = [comp['label'] + 1 for comp in components if comp is not None]
+    labels = labels + 1
+
+    markers_images = {lbl: bitwise_and(labels, inRange(labels, lbl, lbl)) for lbl in found_labels}
+    markers_images[components[1]['label']+1] = find_horizon(markers_images[components[1]['label']+1])
+
+    erode_final_kernel = np.ones((80, 80), np.uint8)
+    markers_images = {k: erode(v, erode_final_kernel) for k, v in markers_images.items()}
+
+    final_marker_image = sum(markers_images.values())
+
+    # visualize markers
+    # for i, im in enumerate(markers_images.values()):
+    #     imshow(f'{i}', im*20)
+
+    return final_marker_image, found_labels
